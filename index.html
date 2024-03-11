@@ -1,0 +1,313 @@
+
+<html>
+  <head>
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1.0,user-scalable=no" />
+    <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/",
+        "mindar-face-three":"https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-face-three.prod.js"
+      }
+    }
+    </script>
+    <script type="module">
+      import * as THREE from 'three';
+      import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+      import { Water } from 'three/addons/objects/Water.js';
+      import { Sky } from 'three/addons/objects/Sky.js';
+      import { MindARThree } from 'mindar-face-three';
+      import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+      import Stats from 'three/addons/libs/stats.module'
+
+      const gui = new GUI();
+      const raycaster = new THREE.Raycaster();
+      const camRay = new THREE.Ray();
+      const pointer = new THREE.Vector2();
+      // window.addEventListener( 'pointermove', function onPointerMove( event ) {
+      //   pointer.x = ( event.clientX / window.innerWidth ) * 2 - 1;
+      //   pointer.y = - ( event.clientY / window.innerHeight ) * 2 + 1;
+      // });
+
+
+      const gltfLoader = new GLTFLoader();
+
+      const $debug = document.querySelector('#debug');
+
+      const mindarThree = new MindARThree({
+        container: document.querySelector("#container"),
+      });
+      const { renderer, /*camera,*/ scene } = mindarThree;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 0.5;
+      // renderer.setPixelRatio(1);
+      const anchor = mindarThree.addAnchor(1);
+      // const leapUpAnc = mindarThree.addAnchor(13);
+      // const leapDownAnc = mindarThree.addAnchor(14);
+      // const leapLeftAnc = mindarThree.addAnchor(78);
+      // const leapRightAnc = mindarThree.addAnchor(38);
+
+      const center = new THREE.Object3D();
+
+      const camera = new THREE.PerspectiveCamera( 60, window.innerWidth / window.innerHeight, 0.1, 2000000 );
+      camera.position.z = 20;
+
+      const dirLight = new THREE.DirectionalLight( 0xffffff, 10 );
+      dirLight.position.z = 3;
+      dirLight.position.y = 1;
+      scene.add(dirLight);
+
+      const ambient = new THREE.AmbientLight( 0x404040, 7 ); // soft white light
+      scene.add( ambient );
+
+      const box = new THREE.Mesh(
+        new THREE.BoxGeometry(.5, .5, .5),
+        new THREE.MeshPhongMaterial( { color: 0x00ff00, wireframe: true } )
+      );
+      scene.add(box);
+
+      // const ground = new THREE.Mesh(
+      //   new THREE.PlaneGeometry(400, 400, 20, 20),
+      //   new THREE.MeshPhongMaterial( { color: 0xff0000, wireframe: true } )
+      // );
+      // ground.rotation.x = -Math.PI/2;
+      // ground.position.y = -10;
+      // scene.add(ground);
+
+      gltfLoader.load('./scenes/Dior/scene.gltf', gltf => {
+        scene.add(gltf.scene);
+      });
+
+      initWater();
+      water.position.y = -1.8;
+      waterGui.children.find(ch => ch._name === 'size').setValue(8);
+      initSky();
+      skyGui.children.find(ch => ch._name === 'azimuth').setValue(70);
+
+      const qNull = new THREE.Quaternion();
+      const qCam = new THREE.Quaternion();
+      const qCamVel = new THREE.Quaternion();
+      const MAX_SPEED = 2.;
+      const ACCEL = .1;
+      let speed = MAX_SPEED;
+
+      const stats = new Stats()
+      document.body.appendChild(stats.dom)
+
+      async function start () {
+        await mindarThree.start();
+
+        renderer.setAnimationLoop(() => {
+          const delta = .016;
+          $debug.innerHTML = '';
+
+          let qHead;
+
+          if (mindarThree.latestEstimate) {
+            const mHead = new THREE.Matrix4(...mindarThree.latestEstimate.faceMatrix);
+            qHead = new THREE.Quaternion()
+              .setFromRotationMatrix(mHead.invert());
+            qHead.z *= -1;
+
+            qCamVel.slerp(qHead, .01);
+            qCamVel.slerp(qNull, .2); // damp
+            qCam.multiply(qCamVel);
+
+            camera.quaternion.copy(qCam);
+          }
+
+          // movement
+          const dirVel = new THREE.Vector3(0, 0, speed);
+          const rotEul = new THREE.Euler(0,0,0, 'YXZ');
+          const headEul = new THREE.Euler(0,0,0, 'YXZ');
+          headEul.setFromQuaternion(qCam);
+          // headEulVel.multiply(qCam);
+
+          dirVel.applyQuaternion(qCam)
+            .multiplyScalar(speed * delta);
+
+          rotEul.set(THREE.MathUtils.degToRad(dirVel.x), THREE.MathUtils.degToRad(dirVel.y), 0);
+          dirVel.applyEuler(rotEul);
+          camera.position.sub(dirVel);
+          speed = Math.min(speed + ACCEL * .1, MAX_SPEED);
+
+          camera.updateProjectionMatrix();
+
+          raycaster.far = 1;
+          raycaster.set(
+            camera.position.clone(),
+            (new THREE.Vector3(0,0,-1)).applyQuaternion(camera.quaternion)
+          );
+
+          // console.time('a')
+          const intersects = raycaster.intersectObjects( scene.children );
+          for ( let i = 0; i < intersects.length; i ++ ) {
+            if (intersects[i].distance < 1) {
+              // intersects[i].object.material.color.set( 0xff0000 );
+              speed *= .95;
+            }
+          }
+          // console.timeEnd('a')
+
+          renderer.render(scene, camera);
+          stats.update();
+        });
+      }
+
+      function stop () {
+        mindarThree.stop();
+        renderer.setAnimationLoop(null);
+      }
+      start();
+
+      window.onfocus = start;
+      window.onblur = stop;
+
+      // window.addEventListener('click', e => renderer.domElement.requestFullscreen());
+
+      var water, waterGui;
+      function initWater () {
+
+        const waterGeometry = new THREE.PlaneGeometry( 10000, 10000 );
+
+        water = new Water(
+          waterGeometry,
+          {
+            textureWidth: 512,
+            textureHeight: 512,
+            waterNormals: new THREE.TextureLoader().load( './waternormals.jpg', function ( texture ) {
+
+              texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+
+            } ),
+            sunDirection: new THREE.Vector3(),
+            sunColor: 0xffffff,
+            waterColor: 0x001e0f,
+            distortionScale: 3.7,
+            fog: scene.fog !== undefined
+          }
+        );
+
+        water.rotation.x = - Math.PI / 2;
+        scene.add(water);
+
+        const waterUniforms = water.material.uniforms;
+
+        waterGui = gui.addFolder( 'Water' );
+        waterGui.add( waterUniforms.distortionScale, 'value', 0, 8, 0.1 ).name( 'distortionScale' );
+        waterGui.add( waterUniforms.size, 'value', 0.1, 10, 0.1 ).name( 'size' );
+        waterGui.add( water.position, 'y', -10, 5, .1);
+        waterGui.open();
+      }
+
+      var sun, sky, skyRT, pmremGenerator, skyGui;
+      function initSky() {
+        const skyScene = new THREE.Scene();
+        pmremGenerator = new THREE.PMREMGenerator( renderer );
+
+        // Add Sky
+        sky = new Sky();
+        sky.scale.setScalar( 450000 );
+        scene.add( sky );
+
+        sun = new THREE.Vector3();
+
+        /// GUI
+
+        const effectController = {
+          turbidity: 10,
+          rayleigh: 3,
+          mieCoefficient: 0.005,
+          mieDirectionalG: 0.7,
+          elevation: 2,
+          azimuth: 180,
+          exposure: renderer.toneMappingExposure
+        };
+
+        skyGui = gui.addFolder('Sky');
+        skyGui.add( effectController, 'turbidity', 0.0, 20.0, 0.1 ).onChange( guiChanged );
+        skyGui.add( effectController, 'rayleigh', 0.0, 4, 0.001 ).onChange( guiChanged );
+        skyGui.add( effectController, 'mieCoefficient', 0.0, 0.1, 0.001 ).onChange( guiChanged );
+        skyGui.add( effectController, 'mieDirectionalG', 0.0, 1, 0.001 ).onChange( guiChanged );
+        skyGui.add( effectController, 'elevation', 0, 90, 0.1 ).onChange( guiChanged );
+        skyGui.add( effectController, 'azimuth', - 180, 180, 0.1 ).onChange( guiChanged );
+        skyGui.add( effectController, 'exposure', 0, 1, 0.0001 ).onChange( guiChanged );
+        guiChanged();
+
+        if ( skyRT !== undefined ) skyRT?.dispose();
+
+        skyScene.add( sky );
+        scene.add( sky );
+
+        skyRT = pmremGenerator.fromScene( skyScene );
+        scene.environment = skyRT.texture;
+
+        function guiChanged() {
+          const uniforms = sky.material.uniforms;
+          uniforms[ 'turbidity' ].value = effectController.turbidity;
+          uniforms[ 'rayleigh' ].value = effectController.rayleigh;
+          uniforms[ 'mieCoefficient' ].value = effectController.mieCoefficient;
+          uniforms[ 'mieDirectionalG' ].value = effectController.mieDirectionalG;
+
+          const phi = THREE.MathUtils.degToRad( 90 - effectController.elevation );
+          const theta = THREE.MathUtils.degToRad( effectController.azimuth );
+
+          sun.setFromSphericalCoords( 1, phi, theta );
+          dirLight.position.copy(sun);
+
+          uniforms[ 'sunPosition' ].value.copy( sun );
+          water?.material.uniforms[ 'sunDirection' ].value.copy( sun ).normalize();
+
+          renderer.toneMappingExposure = effectController.exposure;
+
+          if ( skyRT !== undefined ) skyRT.dispose();
+
+          skyRT = pmremGenerator.fromScene( skyScene );
+          scene.environment = skyRT.texture;
+          // renderer.render( scene, camera );
+        }
+      }
+    </script>
+    <style>
+      * {
+        touch-action: none !important;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      html {
+        overflow: hidden;
+        height: 100vh;
+/*        pointer-events: none;*/
+        zoom: none;
+        touch-action: none;
+      }
+      body {
+        margin: 0;
+        padding: 0
+      }
+      #debug {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr 1fr;
+      }
+      #container {
+        width: 100vw;
+        height: 100vh;
+        position: relative;
+        overflow: hidden;
+      }
+      #control {
+        position: fixed;
+        top: 0;
+        left: 0;
+        z-index: 2;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="debug">
+
+    </div>
+    <div id="container">
+    </div>
+  </body>
+</html>
